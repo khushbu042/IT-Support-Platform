@@ -16,5 +16,19 @@ class UserResponse(BaseModel):
     name: str 
     email: str 
 
+class CreateTicketRequest(BaseModel):
+    title: str
+    description: str
+    user_id: int
+
+class TicketResponse(BaseModel):
+    id: int
+    title: str
+    description: str
+    user_id: int
+
+class TicketWithUserResponse(TicketResponse):
+    user: UserResponse
+
     
 
