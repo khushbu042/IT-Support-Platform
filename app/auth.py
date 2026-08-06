@@ -1,7 +1,6 @@
 import jwt
-
 from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.config import SECRET_KEY
@@ -10,31 +9,23 @@ from app.models import User
 
 security = HTTPBearer()
 
-def get_current_user( credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db),):
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
     token = credentials.credentials
 
     try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=["HS256"]
-        )
+        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
 
         user_id = payload.get("user_id")
 
-        current_user = db.query(User).filter(
-            User.id == user_id
-        ).first()
+        current_user = db.query(User).filter(User.id == user_id).first()
 
         if not current_user:
-            raise HTTPException(
-                status_code = 401,
-                detail = "User not found"
-            )
+            raise HTTPException(status_code=401, detail="User not found")
         return current_user
-    
+
     except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code = 401,
-            detail = "Invalid or expired token"
-        )
+        raise HTTPException(status_code=401, detail="Invalid or expired token")

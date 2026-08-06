@@ -1,6 +1,8 @@
-from app.database import Base
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, ForeignKey
+
+from app.database import Base
+
 
 class User(Base):
     __tablename__ = "users"
@@ -12,13 +14,12 @@ class User(Base):
 
     tickets: Mapped[list["Ticket"]] = relationship(back_populates="user")
 
-    
 
 class Ticket(Base):
-    __tablename__ = "tickets" 
-    id: Mapped[int] = mapped_column(primary_key=True) 
-    title: Mapped[str] = mapped_column(String(255)) 
-    description: Mapped[str] = mapped_column(String) 
+    __tablename__ = "tickets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str] = mapped_column(String)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
     user: Mapped["User"] = relationship(back_populates="tickets")
