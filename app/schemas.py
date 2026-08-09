@@ -1,3 +1,4 @@
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -26,7 +27,6 @@ class UserResponse(BaseModel):
 class CreateTicketRequest(BaseModel):
     title: str
     description: str
-    user_id: int
 
 
 class UpdateTicketRequest(BaseModel):
@@ -51,3 +51,13 @@ class TicketListResponse(BaseModel):
     total: int
     total_pages: int
     data: list[TicketResponse]
+
+
+class BulkUpdateTicketRequest(BaseModel):
+    id: int
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
+class BulkDeleteTicketRequest(BaseModel):
+    id: int

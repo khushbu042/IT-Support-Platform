@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.database import get_db
 from app.schemas import (
+    BulkDeleteTicketRequest,
+    BulkUpdateTicketRequest,
     CreateTicketRequest,
     MessageResponse,
     TicketListResponse,
@@ -11,6 +13,9 @@ from app.schemas import (
     UpdateTicketRequest,
 )
 from app.services.ticket_service import (
+    bulk_create_tickets,
+    bulk_delete_tickets,
+    bulk_update_tickets,
     create_ticket,
     delete_ticket,
     get_all_ticket,
@@ -23,6 +28,33 @@ router = APIRouter()
 @router.post("/tickets", response_model=TicketResponse)
 def create_ticket_api(ticket: CreateTicketRequest, db: Session = Depends(get_db)):
     return create_ticket(ticket, db)
+
+
+@router.post("/tickets/bulk")
+def bulk_create_tickets_api(
+    tickets: list[CreateTicketRequest],
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return bulk_create_tickets(tickets, current_user, db)
+
+
+@router.delete("/tickets/bulk")
+def bulk_delete_tickets_api(
+    tickets: list[BulkDeleteTicketRequest],
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return bulk_delete_tickets(tickets, current_user, db)
+
+
+@router.patch("/tickets/bulk")
+def bulk_update_ticket_api(
+    tickets: list[BulkUpdateTicketRequest],
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return bulk_update_tickets(tickets, current_user, db)
 
 
 @router.get("/tickets", response_model=TicketListResponse)

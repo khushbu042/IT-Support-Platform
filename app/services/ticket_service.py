@@ -4,7 +4,12 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import Ticket, User
-from app.schemas import CreateTicketRequest, UpdateTicketRequest
+from app.schemas import (
+    BulkDeleteTicketRequest,
+    BulkUpdateTicketRequest,
+    CreateTicketRequest,
+    UpdateTicketRequest,
+)
 
 
 def create_ticket(ticket: CreateTicketRequest, db: Session):
@@ -125,3 +130,123 @@ def get_all_ticket(page, limit, user_id, title, sort_by, order, db: Session):
         "total_pages": total_pages,
         "data": existing_tickets,
     }
+
+
+def bulk_create_tickets(
+    tickets: list[CreateTicketRequest],
+    current_user: User,
+    db: Session,
+):
+    if not tickets:
+        raise HTTPException(status_code=400, detail=" At least one ticket is required.")
+
+    ticket_objects = []
+
+    for ticket in tickets:
+        new_ticket = Ticket(
+            title=ticket.title, description=ticket.description, user_id=current_user.id
+        )
+        ticket_objects.append(new_ticket)
+
+    try:
+        db.add_all(ticket_objects)
+        db.commit()
+    except:
+        db.rollback()
+        raise
+
+    return ticket_objects
+
+
+def bulk_update_tickets(
+    update_tickets: list[BulkUpdateTicketRequest],
+    current_user: User,
+    db: Session,
+):
+    if not update_tickets:
+        raise HTTPException(
+            status_code=400, detail=" At least one ticket is required to update"
+        )
+
+    requested_ticket_ids = {update.id for update in update_tickets}
+
+    tickets = db.query(Ticket).filter(Ticket.id.in_(requested_ticket_ids)).all()
+
+    db_ticket_ids = {ticket.id for ticket in tickets}
+
+    missing_ids = requested_ticket_ids - db_ticket_ids
+
+    if missing_ids:
+        raise HTTPException(
+            status_code=404, detail=f"Tickets not found: {list(missing_ids)}"
+        )
+
+    for ticket in tickets:
+        if ticket.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403, detail="Not authorized to update one or more tickets"
+            )
+
+    ticket_map = {ticket.id: ticket for ticket in tickets}
+
+    for update in update_tickets:
+        ticket = ticket_map[update.id]
+
+        update_data = update.model_dump(exclude_unset=True, exclude={"id"})
+
+        for key, value in update_data.items():
+            setattr(ticket, key, value)
+
+    try:
+        db.commit()
+        db.refresh(tickets)
+    except:
+        db.rollback()
+        raise
+
+    return tickets
+
+
+def bulk_delete_tickets(
+    delete_tickets: list[BulkDeleteTicketRequest],
+    current_user: User,
+    db: Session,
+):
+    if not delete_tickets:
+        raise HTTPException(
+            status_code=400, detail=" At least one ticket is required to delete"
+        )
+
+    unique_delete_ids = {ticket.id for ticket in delete_tickets}
+
+    db_tickets = db.query(Ticket).filter(Ticket.id.in_(unique_delete_ids)).all()
+
+    db_ticket_ids = {ticket.id for ticket in db_tickets}
+
+    missing_ids = unique_delete_ids - db_ticket_ids
+
+    if missing_ids:
+        raise HTTPException(
+            status_code=404, detail=f"Tickets not found: {list(missing_ids)}"
+        )
+
+    for ticket in db_tickets:
+        if ticket.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Not authorized to delete one or more tickets",
+            )
+
+    deleted_count = (
+        db.query(Ticket)
+        .filter(Ticket.id.in_(unique_delete_ids))
+        .delete(synchronize_session=False)
+    )
+
+    try:
+        db.commit()
+    except:
+        db.rollback()
+        raise
+
+    return {"message": f"{deleted_count} tickets deleted successfully"}
