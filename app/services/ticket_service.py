@@ -1,15 +1,29 @@
 import math
+import shutil
+from pathlib import Path
+from uuid import uuid4
 
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Ticket, User
+from app.models import Attachment, Ticket, User
 from app.schemas import (
     BulkDeleteTicketRequest,
     BulkUpdateTicketRequest,
     CreateTicketRequest,
     UpdateTicketRequest,
 )
+
+UPLOAD_DIR = Path("app/uploads/tickets")
+ALLOWED_FILES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".pdf": "application/pdf",
+}
+MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 
 def create_ticket(ticket: CreateTicketRequest, db: Session):
@@ -250,3 +264,199 @@ def bulk_delete_tickets(
         raise
 
     return {"message": f"{deleted_count} tickets deleted successfully"}
+
+
+def upload_attachment(
+    ticket_id: int,
+    file: UploadFile,
+    current_user: User,
+    db: Session,
+):
+    ticket = db.get(Ticket, ticket_id)
+
+    if not ticket:
+        raise HTTPException(
+            status_code=404,
+            detail="Ticket Not found",
+        )
+
+    if ticket.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to add attachment to this ticket",
+        )
+
+    original_filename = file.filename or ""
+
+    extension = Path(original_filename).suffix.lower()
+
+    if extension not in ALLOWED_FILES:
+        raise HTTPException(status_code=400, detail="Unsupported file extension")
+
+    if file.content_type != ALLOWED_FILES[extension]:
+        raise HTTPException(
+            status_code=400, detail="File extension and content type do not match"
+        )
+
+    safe_filename = f"{uuid4()}{extension}"
+
+    ticket_dir = UPLOAD_DIR / str(ticket_id)
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+
+    file_path = ticket_dir / safe_filename
+
+    file_size = 0
+
+    try:
+        with open(file_path, "wb") as buffer:
+
+            while True:
+                chunk = file.file.read(CHUNK_SIZE)
+
+                if not chunk:
+                    break
+
+                file_size += len(chunk)
+
+                if file_size > MAX_FILE_SIZE:
+                    raise HTTPException(
+                        status_code=413, detail="File size exceeds 5 MB limit"
+                    )
+
+                buffer.write(chunk)
+    except Exception:
+        if file_path.exists():
+            file_path.unlink()
+
+        raise
+
+    attachment = Attachment(
+        ticket_id=ticket_id,
+        filename=original_filename,
+        file_path=str(file_path),
+        content_type=file.content_type,
+        file_size=file_size,
+    )
+
+    try:
+        db.add(attachment)
+        db.commit()
+        db.refresh(attachment)
+    except:
+        db.rollback()
+
+        if file_path.exists():
+            file_path.unlink()
+
+        raise
+
+    return attachment
+
+
+def get_ticket_attachments(
+    ticket_id: int,
+    current_user: User,
+    db: Session,
+):
+    ticket = db.get(Ticket, ticket_id)
+
+    if not ticket:
+        raise HTTPException(
+            status_code=404,
+            detail="Ticket not found",
+        )
+
+    if ticket.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view attachments for this ticket",
+        )
+
+    attachments = db.query(Attachment).filter(Attachment.ticket_id == ticket_id).all()
+
+    return attachments
+
+
+def download_attachment(
+    attachment_id: int,
+    current_user: User,
+    db: Session,
+):
+    attachment = db.get(Attachment, attachment_id)
+
+    if not attachment:
+        raise HTTPException(
+            status_code=404,
+            detail="Attachment not found",
+        )
+
+    ticket = db.get(Ticket, attachment.ticket_id)
+
+    if not ticket:
+        raise HTTPException(
+            status_code=404,
+            detail="Ticket not found",
+        )
+
+    if ticket.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to download this attachment",
+        )
+
+    file_path = Path(attachment.file_path)
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Attachment file not found",
+        )
+
+    return FileResponse(
+        path=file_path,
+        media_type=attachment.content_type,
+        filename=attachment.filename,
+    )
+
+
+def delete_attachment(
+    attachment_id: int,
+    current_user: User,
+    db: Session,
+):
+    attachment = db.get(Attachment, attachment_id)
+
+    if not attachment:
+        raise HTTPException(
+            status_code=404,
+            detail="Attachment not found",
+        )
+
+    ticket = db.get(Ticket, attachment.ticket_id)
+
+    if not ticket:
+        raise HTTPException(
+            status_code=404,
+            detail="Ticket not found",
+        )
+
+    if ticket.user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to delete this attachment",
+        )
+
+    file_path = Path(attachment.file_path)
+
+    if file_path.exists():
+        file_path.unlink()
+
+    try:
+        db.delete(attachment)
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
+
+    return {"message": "Attachment deleted successfully"}

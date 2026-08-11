@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -18,8 +19,11 @@ from app.services.ticket_service import (
     bulk_update_tickets,
     create_ticket,
     delete_ticket,
+    download_attachment,
     get_all_ticket,
+    get_ticket_attachments,
     update_ticket,
+    upload_attachment,
 )
 
 router = APIRouter()
@@ -87,3 +91,39 @@ def delete_ticket_api(
     db: Session = Depends(get_db),
 ):
     return delete_ticket(ticket_id, current_user, db)
+
+
+@router.post("/tickets/{ticket_id}/attachments")
+def upload_attachment_api(
+    ticket_id: int,
+    file: UploadFile = File(...),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return upload_attachment(ticket_id, file, current_user, db)
+
+
+@router.get("/tickets/{ticket_id}/attachments")
+def get_ticket_attachments_api(
+    ticket_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return get_ticket_attachments(
+        ticket_id,
+        current_user,
+        db,
+    )
+
+
+@router.get("/attachments/{attachment_id}/download", response_class=FileResponse)
+def download_attachment_api(
+    attachment_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return download_attachment(
+        attachment_id,
+        current_user,
+        db,
+    )
