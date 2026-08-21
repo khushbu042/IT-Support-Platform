@@ -6,8 +6,10 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
+from app.services.s3_service import upload_file, delete_file, get_file, s3_client, generate_download_url
+from fastapi.responses import StreamingResponse
 
-from app.models import Attachment, Ticket, User
+from app.models import Attachment, Employee, Ticket
 from app.schemas import (
     BulkDeleteTicketRequest,
     BulkUpdateTicketRequest,
@@ -28,10 +30,10 @@ CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 def create_ticket(ticket: CreateTicketRequest, db: Session):
 
-    existing_user = db.query(User).filter(User.id == ticket.user_id).first()
+    existing_user = db.query(Employee).filter(Employee.id == ticket.user_id).first()
 
     if not existing_user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="Employee not found")
 
     new_ticket = Ticket(
         title=ticket.title, description=ticket.description, user_id=ticket.user_id
@@ -45,7 +47,7 @@ def create_ticket(ticket: CreateTicketRequest, db: Session):
 
 
 def update_ticket(
-    ticket_id: int, ticket_update: UpdateTicketRequest, current_user: User, db: Session
+    ticket_id: int, ticket_update: UpdateTicketRequest, current_user: Employee, db: Session
 ):
     existing_ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     # ticket = db.get(Ticket, ticket_id)
@@ -76,7 +78,7 @@ def update_ticket(
     return existing_ticket
 
 
-def delete_ticket(ticket_id: int, current_user: User, db: Session):
+def delete_ticket(ticket_id: int, current_user: Employee, db: Session):
     # existing_ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     ticket = db.get(Ticket, ticket_id)
 
@@ -132,7 +134,7 @@ def get_all_ticket(page, limit, user_id, title, sort_by, order, db: Session):
     query = query.order_by(column.asc() if order == "asc" else column.desc())
 
     existing_tickets = (
-        query.options(joinedload(Ticket.user)).offset(offset).limit(limit).all()
+        query.options(joinedload(Ticket.employee)).offset(offset).limit(limit).all()
     )
 
     total_pages = math.ceil(total / limit)
@@ -148,7 +150,7 @@ def get_all_ticket(page, limit, user_id, title, sort_by, order, db: Session):
 
 def bulk_create_tickets(
     tickets: list[CreateTicketRequest],
-    current_user: User,
+    current_user: Employee,
     db: Session,
 ):
     if not tickets:
@@ -174,7 +176,7 @@ def bulk_create_tickets(
 
 def bulk_update_tickets(
     update_tickets: list[BulkUpdateTicketRequest],
-    current_user: User,
+    current_user: Employee,
     db: Session,
 ):
     if not update_tickets:
@@ -223,7 +225,7 @@ def bulk_update_tickets(
 
 def bulk_delete_tickets(
     delete_tickets: list[BulkDeleteTicketRequest],
-    current_user: User,
+    current_user: Employee,
     db: Session,
 ):
     if not delete_tickets:
@@ -269,7 +271,7 @@ def bulk_delete_tickets(
 def upload_attachment(
     ticket_id: int,
     file: UploadFile,
-    current_user: User,
+    current_user: Employee,
     db: Session,
 ):
     ticket = db.get(Ticket, ticket_id)
@@ -300,40 +302,42 @@ def upload_attachment(
 
     safe_filename = f"{uuid4()}{extension}"
 
-    ticket_dir = UPLOAD_DIR / str(ticket_id)
-    ticket_dir.mkdir(parents=True, exist_ok=True)
+    object_key = f"tickets/{ticket_id}/{safe_filename}"
 
-    file_path = ticket_dir / safe_filename
-
-    file_size = 0
+    file_size = 0 
 
     try:
-        with open(file_path, "wb") as buffer:
+        # Read file in chunks to validate size
+        while True:
+            chunk = file.file.read(CHUNK_SIZE)
 
-            while True:
-                chunk = file.file.read(CHUNK_SIZE)
+            if not chunk:
+                break
 
-                if not chunk:
-                    break
+            file_size += len(chunk)
 
-                file_size += len(chunk)
+            if file_size > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=413, detail="File size exceeds 5 MB limit"
+                )
 
-                if file_size > MAX_FILE_SIZE:
-                    raise HTTPException(
-                        status_code=413, detail="File size exceeds 5 MB limit"
-                    )
+        # Reset file pointer before uploading to S3
+        file.file.seek(0)
 
-                buffer.write(chunk)
+        upload_file(
+            file.file,
+            object_key,
+        )
+
     except Exception:
-        if file_path.exists():
-            file_path.unlink()
-
+        # Remove S3 object if upload partially/fully succeeded
+        delete_file(object_key)
         raise
 
     attachment = Attachment(
         ticket_id=ticket_id,
         filename=original_filename,
-        file_path=str(file_path),
+        file_path=object_key,
         content_type=file.content_type,
         file_size=file_size,
     )
@@ -345,9 +349,9 @@ def upload_attachment(
     except:
         db.rollback()
 
-        if file_path.exists():
-            file_path.unlink()
-
+        # DB failed, so remove S3 object
+        delete_file(object_key)
+        
         raise
 
     return attachment
@@ -355,7 +359,7 @@ def upload_attachment(
 
 def get_ticket_attachments(
     ticket_id: int,
-    current_user: User,
+    current_user: Employee,
     db: Session,
 ):
     ticket = db.get(Ticket, ticket_id)
@@ -379,7 +383,7 @@ def get_ticket_attachments(
 
 def download_attachment(
     attachment_id: int,
-    current_user: User,
+    current_user: Employee,
     db: Session,
 ):
     attachment = db.get(Attachment, attachment_id)
@@ -404,24 +408,34 @@ def download_attachment(
             detail="Not authorized to download this attachment",
         )
 
-    file_path = Path(attachment.file_path)
+    
+    download_url = generate_download_url(attachment.file_path)
 
-    if not file_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Attachment file not found",
-        )
-
-    return FileResponse(
-        path=file_path,
-        media_type=attachment.content_type,
-        filename=attachment.filename,
-    )
+    # except FileNotFoundError:
+    #     raise HTTPException(
+    #         status_code=404,
+    #         detail="Attachment not found in S3",
+    #     )
+    
+    # return StreamingResponse(
+    #     s3_object["Body"],
+    #     media_type=attachment.content_type,
+    #     headers={
+    #         "Content-Disposition": f'attachement; filename="{attachment.filename}"'
+    #     },
+    # )
+    return {
+        "filename": attachment.filename,
+        "content_type": attachment.content_type,
+        "file_size": attachment.file_size,
+        "download_url": download_url,
+    }
+   
 
 
 def delete_attachment(
     attachment_id: int,
-    current_user: User,
+    current_user: Employee,
     db: Session,
 ):
     attachment = db.get(Attachment, attachment_id)

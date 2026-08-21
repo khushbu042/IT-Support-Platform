@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.routers.ticket_router import router as ticket_router
+# from app.routers.ticket_router import router as ticket_router
 from app.routers.user_router import router as user_router
 
 app = FastAPI()
@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 app.include_router(user_router)
-app.include_router(ticket_router)
+# app.include_router(ticket_router)
 
 
 @app.middleware("http")
