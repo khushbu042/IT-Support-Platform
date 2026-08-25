@@ -1,20 +1,18 @@
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
-from app.models import UserRole, UserStatus
+from app.models import UserRole, TicketStatus, TicketPriority, AttachmentStatus
 
 
 class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1)
     email: EmailStr
-    password: str = Field(..., min_length=12)
+    password_hash: str = Field(..., min_length=12)
     confirm_password: str
     role: UserRole
-    department: str | None = Field(default=None, min_length=1)
-    team: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def passwords_match(self):
-        if self.password != self.confirm_password:
+        if self.password_hash != self.confirm_password:
             raise ValueError("Passwords do not match")
         return self
 
@@ -26,13 +24,10 @@ class UserResponse(BaseModel):
     name: str
     email: EmailStr
     role: UserRole
-    department: str | None = None
-    team: str | None = None
-    status: UserStatus
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password_hash: str
 
 class LoginResponseData(BaseModel):
     access_token: str = Field(..., description="JWT access token")
@@ -51,41 +46,63 @@ class MessageResponse(BaseModel):
     message: str
 
 
+class TicketAttachmentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
 
-# class CreateTicketRequest(BaseModel):
-#     title: str
-#     description: str
-#
-#
-# class UpdateTicketRequest(BaseModel):
-#     title: str | None = None
-#     description: str | None = None
-#
-#
-# class TicketResponse(BaseModel):
-#     id: int
-#     title: str
-#     description: str
-#     user_id: int
-#
-#
-# class TicketWithEmployeeResponse(TicketResponse):
-#     employee: EmployeeResponse
-#
-#
-# class TicketListResponse(BaseModel):
-#     page: int
-#     limit: int
-#     total: int
-#     total_pages: int
-#     data: list[TicketResponse]
-#
-#
-# class BulkUpdateTicketRequest(BaseModel):
-#     id: int
-#     title: Optional[str] = None
-#     description: Optional[str] = None
-#
-#
-# class BulkDeleteTicketRequest(BaseModel):
-#     id: int
+    id: int
+    ticket_id: int
+    comment_id: int | None = None
+    uploaded_by: int
+    file_name: str
+    file_url: str
+    file_type: str
+    file_size: int
+    status: AttachmentStatus
+    created_at: datetime
+
+
+class CreateTicketRequest(BaseModel):
+    title: str
+    description: str
+    customer_id: int
+
+
+class UpdateTicketRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    status: TicketStatus | None = None
+    priority: TicketPriority | None = None
+
+
+class TicketResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    description: str
+    status: TicketStatus
+    priority: TicketPriority
+    customer_id: int
+    assigned_agent_id: int | None = None
+    sla_deadline: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    attachments: list[TicketAttachmentResponse] = []
+
+
+class TicketListResponse(BaseModel):
+    page: int
+    limit: int
+    total: int
+    total_pages: int
+    data: list[TicketResponse]
+
+
+class BulkUpdateTicketRequest(BaseModel):
+    id: int
+    title: str | None = None
+    description: str | None = None
+
+
+class BulkDeleteTicketRequest(BaseModel):
+    id: int

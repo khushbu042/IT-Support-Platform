@@ -5,6 +5,13 @@ from app.schemas.schemas import (
     MessageResponse,
     RegisterRequest,
     UserResponse,
+    CreateTicketRequest,
+    UpdateTicketRequest,
+    BulkUpdateTicketRequest,
+    BulkDeleteTicketRequest,
+    TicketResponse,
+    TicketListResponse,
+    TicketAttachmentResponse,
 )
 
 __all__ = [
@@ -14,4 +21,12 @@ __all__ = [
     "RegisterRequest",
     "LoginResponseData",
     "LoginResponseSchema",
+    "CreateTicketRequest",
+    "UpdateTicketRequest",
+    "BulkUpdateTicketRequest",
+    "BulkDeleteTicketRequest",
+    "TicketResponse",
+    "TicketListResponse",
+    "TicketAttachmentResponse",
 ]
+

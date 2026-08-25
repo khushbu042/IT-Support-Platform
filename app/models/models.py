@@ -162,6 +162,12 @@ class Ticket(Base):
         "TicketComment", back_populates="ticket", cascade="all, delete-orphan"
     )
 
+    attachments = relationship(
+        "TicketAttachment",
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+    )
+
 # ---------- TICKET COMMENT ----------
 class TicketComment(Base):
     __tablename__ = "ticket_comments"

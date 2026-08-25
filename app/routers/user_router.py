@@ -19,7 +19,7 @@ def register(user: RegisterRequest, db: Session = Depends(get_db)):
     return register_user(user, db)
 
 
-@router.post("/login", response_model=LoginResponseSchema)
+@router.post("/login")
 def login(user: LoginRequest, db: Session = Depends(get_db)):
     return login_user(user, db)
 
