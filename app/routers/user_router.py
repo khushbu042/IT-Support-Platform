@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user
@@ -20,8 +20,13 @@ def register(user: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login")
-def login(user: LoginRequest, db: Session = Depends(get_db)):
-    return login_user(user, db)
+async def login(
+    user: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    print(request)
+    return await login_user(user=user, db=db, ip_address=request.client.host)
 
 
 @router.get("/profile", response_model=UserResponse)

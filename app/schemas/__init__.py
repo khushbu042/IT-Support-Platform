@@ -12,6 +12,7 @@ from app.schemas.schemas import (
     TicketResponse,
     TicketListResponse,
     TicketAttachmentResponse,
+    AssignTicketRequest
 )
 
 __all__ = [
@@ -28,5 +29,6 @@ __all__ = [
     "TicketResponse",
     "TicketListResponse",
     "TicketAttachmentResponse",
+    "AssignTicketRequest",
 ]
 

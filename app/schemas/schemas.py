@@ -62,9 +62,17 @@ class TicketAttachmentResponse(BaseModel):
 
 
 class CreateTicketRequest(BaseModel):
-    title: str
-    description: str
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str = Field(..., min_length=1)
+    status: TicketStatus = TicketStatus.open
+    priority: TicketPriority = TicketPriority.medium
     customer_id: int
+    assigned_agent_id: int | None = None
+    sla_deadline: datetime | None = None
+
+class AssignTicketRequest(BaseModel):
+    assignee_id: int
+   
 
 
 class UpdateTicketRequest(BaseModel):
@@ -106,3 +114,5 @@ class BulkUpdateTicketRequest(BaseModel):
 
 class BulkDeleteTicketRequest(BaseModel):
     id: int
+
+

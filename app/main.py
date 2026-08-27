@@ -5,11 +5,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-# from app.routers.ticket_router import router as ticket_router
-from app.routers.user_router import router as user_router
 
+from app.routers import ticket_router, user_router
+from app.infrastructure.redis.client import redis_client
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,7 +18,15 @@ app.add_middleware(
 )
 
 app.include_router(user_router)
-# app.include_router(ticket_router)
+app.include_router(ticket_router)
+
+@app.get("/redis-health")
+async def redis_health():
+    response = await redis_client.ping()
+
+    return {
+        "redis": response
+    }
 
 
 @app.middleware("http")

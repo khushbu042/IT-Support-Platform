@@ -9,12 +9,20 @@ from sqlalchemy.orm import Session, joinedload
 from app.services.s3_service import upload_file, delete_file, get_file, s3_client, generate_download_url
 from fastapi.responses import StreamingResponse
 
-from app.models import Attachment, Employee, Ticket
+from app.models import (
+    AttachmentStatus,
+    Ticket,
+    TicketAttachment,
+    TicketPriority,
+    TicketStatus,
+    User,
+)
 from app.schemas import (
     BulkDeleteTicketRequest,
     BulkUpdateTicketRequest,
     CreateTicketRequest,
     UpdateTicketRequest,
+    AssignTicketRequest,
 )
 
 UPLOAD_DIR = Path("app/uploads/tickets")
@@ -27,35 +35,68 @@ ALLOWED_FILES = {
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 CHUNK_SIZE = 1024 * 1024  # 1 MB
 
-
 def create_ticket(ticket: CreateTicketRequest, db: Session):
+    existing_customer = db.query(User).filter(User.id == ticket.customer_id).first()
 
-    existing_user = db.query(Employee).filter(Employee.id == ticket.user_id).first()
-
-    if not existing_user:
-        raise HTTPException(status_code=404, detail="Employee not found")
+    if not existing_customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
 
     new_ticket = Ticket(
-        title=ticket.title, description=ticket.description, user_id=ticket.user_id
+        title=ticket.title,
+        description=ticket.description,
+        status=ticket.status,
+        priority=ticket.priority,
+        customer_id=ticket.customer_id,
+        assigned_agent_id=ticket.assigned_agent_id,
+        sla_deadline=ticket.sla_deadline,
     )
 
     db.add(new_ticket)
     db.commit()
     db.refresh(new_ticket)
 
+    # publish "ticket.created" event here later (for notifications)
+
     return new_ticket
 
+def assign_ticket(ticket_id: int, assignee: AssignTicketRequest, db: Session):
+    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    assignee_id = assignee.assignee_id
+    assignee_user = db.query(User).filter(User.id == assignee_id).first()
+    if not assignee_user:
+        raise HTTPException(status_code=404, detail="Assignee not found")
+
+    # optional but recommended: only allow assigning to users with an "agent"/"admin" role
+    if assignee_user.role not in ("agent", "admin"):
+        raise HTTPException(status_code=400, detail="User is not eligible to be assigned tickets")
+
+    ticket.assigned_agent_id = assignee_id
+
+    if ticket.status == TicketStatus.open:
+        ticket.status = TicketStatus.pending
+
+    db.commit()
+    db.refresh(ticket)
+
+    # publish "ticket.assigned" event here later (for notifications)
+
+    return ticket
 
 def update_ticket(
-    ticket_id: int, ticket_update: UpdateTicketRequest, current_user: Employee, db: Session
+    ticket_id: int,
+    ticket_update: UpdateTicketRequest,
+    current_user: User,
+    db: Session,
 ):
     existing_ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
-    # ticket = db.get(Ticket, ticket_id)
 
     if not existing_ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    if existing_ticket.user_id != current_user.id:
+    if existing_ticket.customer_id != current_user.id:
         raise HTTPException(
             status_code=403, detail="You don't have permission to update this ticket."
         )
@@ -63,7 +104,7 @@ def update_ticket(
     update_data = ticket_update.model_dump(exclude_unset=True)
 
     if not update_data:
-        raise HTTPException(status_code=400, details="No fields provided for update")
+        raise HTTPException(status_code=400, detail="No fields provided for update")
 
     for key, value in update_data.items():
         setattr(existing_ticket, key, value)
@@ -78,14 +119,13 @@ def update_ticket(
     return existing_ticket
 
 
-def delete_ticket(ticket_id: int, current_user: Employee, db: Session):
-    # existing_ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+def delete_ticket(ticket_id: int, current_user: User, db: Session):
     ticket = db.get(Ticket, ticket_id)
 
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    if ticket.user_id != current_user.id:
+    if ticket.customer_id != current_user.id:
         raise HTTPException(
             status_code=403, detail="You don't have permission to delete this ticket."
         )
@@ -101,12 +141,14 @@ def delete_ticket(ticket_id: int, current_user: Employee, db: Session):
     return {"message": "Ticket deleted successfully"}
 
 
-def get_all_ticket(page, limit, user_id, title, sort_by, order, db: Session):
-
+def get_all_ticket(page, limit, customer_id, title, sort_by, order, db: Session):
     allowed_sort_fields = {
         "id": Ticket.id,
         "title": Ticket.title,
-        "user_id": Ticket.user_id,
+        "customer_id": Ticket.customer_id,
+        "status": Ticket.status,
+        "priority": Ticket.priority,
+        "assigned_agent_id": Ticket.assigned_agent_id,
     }
 
     allowed_orders = {"asc", "desc"}
@@ -115,8 +157,8 @@ def get_all_ticket(page, limit, user_id, title, sort_by, order, db: Session):
 
     query = db.query(Ticket)
 
-    if user_id is not None:
-        query = query.filter(Ticket.user_id == user_id)
+    if customer_id is not None:
+        query = query.filter(Ticket.customer_id == customer_id)
 
     if title:
         query = query.filter(Ticket.title.ilike(f"%{title}%"))
@@ -134,7 +176,13 @@ def get_all_ticket(page, limit, user_id, title, sort_by, order, db: Session):
     query = query.order_by(column.asc() if order == "asc" else column.desc())
 
     existing_tickets = (
-        query.options(joinedload(Ticket.employee)).offset(offset).limit(limit).all()
+        query.options(
+            joinedload(Ticket.customer),
+            joinedload(Ticket.assigned_agent),
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
     )
 
     total_pages = math.ceil(total / limit)
@@ -150,7 +198,7 @@ def get_all_ticket(page, limit, user_id, title, sort_by, order, db: Session):
 
 def bulk_create_tickets(
     tickets: list[CreateTicketRequest],
-    current_user: Employee,
+    current_user: User,
     db: Session,
 ):
     if not tickets:
@@ -159,15 +207,27 @@ def bulk_create_tickets(
     ticket_objects = []
 
     for ticket in tickets:
+        if ticket.customer_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="You can only create tickets for your own customer account.",
+            )
+
         new_ticket = Ticket(
-            title=ticket.title, description=ticket.description, user_id=current_user.id
+            title=ticket.title,
+            description=ticket.description,
+            status=ticket.status,
+            priority=ticket.priority,
+            customer_id=ticket.customer_id,
+            assigned_agent_id=ticket.assigned_agent_id,
+            sla_deadline=ticket.sla_deadline,
         )
         ticket_objects.append(new_ticket)
 
     try:
         db.add_all(ticket_objects)
         db.commit()
-    except:
+    except Exception:
         db.rollback()
         raise
 
@@ -176,7 +236,7 @@ def bulk_create_tickets(
 
 def bulk_update_tickets(
     update_tickets: list[BulkUpdateTicketRequest],
-    current_user: Employee,
+    current_user: User,
     db: Session,
 ):
     if not update_tickets:
@@ -198,7 +258,7 @@ def bulk_update_tickets(
         )
 
     for ticket in tickets:
-        if ticket.user_id != current_user.id:
+        if ticket.customer_id != current_user.id:
             raise HTTPException(
                 status_code=403, detail="Not authorized to update one or more tickets"
             )
@@ -216,7 +276,7 @@ def bulk_update_tickets(
     try:
         db.commit()
         db.refresh(tickets)
-    except:
+    except Exception:
         db.rollback()
         raise
 
@@ -225,7 +285,7 @@ def bulk_update_tickets(
 
 def bulk_delete_tickets(
     delete_tickets: list[BulkDeleteTicketRequest],
-    current_user: Employee,
+    current_user: User,
     db: Session,
 ):
     if not delete_tickets:
@@ -247,7 +307,7 @@ def bulk_delete_tickets(
         )
 
     for ticket in db_tickets:
-        if ticket.user_id != current_user.id:
+        if ticket.customer_id != current_user.id:
             raise HTTPException(
                 status_code=403,
                 detail="Not authorized to delete one or more tickets",
@@ -261,7 +321,7 @@ def bulk_delete_tickets(
 
     try:
         db.commit()
-    except:
+    except Exception:
         db.rollback()
         raise
 
@@ -271,7 +331,7 @@ def bulk_delete_tickets(
 def upload_attachment(
     ticket_id: int,
     file: UploadFile,
-    current_user: Employee,
+    current_user: User,
     db: Session,
 ):
     ticket = db.get(Ticket, ticket_id)
@@ -282,7 +342,7 @@ def upload_attachment(
             detail="Ticket Not found",
         )
 
-    if ticket.user_id != current_user.id:
+    if ticket.customer_id != current_user.id:
         raise HTTPException(
             status_code=403,
             detail="Not authorized to add attachment to this ticket",
@@ -304,10 +364,9 @@ def upload_attachment(
 
     object_key = f"tickets/{ticket_id}/{safe_filename}"
 
-    file_size = 0 
+    file_size = 0
 
     try:
-        # Read file in chunks to validate size
         while True:
             chunk = file.file.read(CHUNK_SIZE)
 
@@ -321,7 +380,6 @@ def upload_attachment(
                     status_code=413, detail="File size exceeds 5 MB limit"
                 )
 
-        # Reset file pointer before uploading to S3
         file.file.seek(0)
 
         upload_file(
@@ -330,28 +388,26 @@ def upload_attachment(
         )
 
     except Exception:
-        # Remove S3 object if upload partially/fully succeeded
         delete_file(object_key)
         raise
 
-    attachment = Attachment(
+    attachment = TicketAttachment(
         ticket_id=ticket_id,
-        filename=original_filename,
-        file_path=object_key,
-        content_type=file.content_type,
+        uploaded_by=current_user.id,
+        file_name=original_filename,
+        file_url=object_key,
+        file_type=file.content_type or "application/octet-stream",
         file_size=file_size,
+        status=AttachmentStatus.uploading,
     )
 
     try:
         db.add(attachment)
         db.commit()
         db.refresh(attachment)
-    except:
+    except Exception:
         db.rollback()
-
-        # DB failed, so remove S3 object
         delete_file(object_key)
-        
         raise
 
     return attachment
@@ -359,7 +415,7 @@ def upload_attachment(
 
 def get_ticket_attachments(
     ticket_id: int,
-    current_user: Employee,
+    current_user: User,
     db: Session,
 ):
     ticket = db.get(Ticket, ticket_id)
@@ -370,23 +426,25 @@ def get_ticket_attachments(
             detail="Ticket not found",
         )
 
-    if ticket.user_id != current_user.id:
+    if ticket.customer_id != current_user.id:
         raise HTTPException(
             status_code=403,
             detail="Not authorized to view attachments for this ticket",
         )
 
-    attachments = db.query(Attachment).filter(Attachment.ticket_id == ticket_id).all()
+    attachments = (
+        db.query(TicketAttachment).filter(TicketAttachment.ticket_id == ticket_id).all()
+    )
 
     return attachments
 
 
 def download_attachment(
     attachment_id: int,
-    current_user: Employee,
+    current_user: User,
     db: Session,
 ):
-    attachment = db.get(Attachment, attachment_id)
+    attachment = db.get(TicketAttachment, attachment_id)
 
     if not attachment:
         raise HTTPException(
@@ -402,43 +460,28 @@ def download_attachment(
             detail="Ticket not found",
         )
 
-    if ticket.user_id != current_user.id:
+    if ticket.customer_id != current_user.id:
         raise HTTPException(
             status_code=403,
             detail="Not authorized to download this attachment",
         )
 
-    
-    download_url = generate_download_url(attachment.file_path)
+    download_url = generate_download_url(attachment.file_url)
 
-    # except FileNotFoundError:
-    #     raise HTTPException(
-    #         status_code=404,
-    #         detail="Attachment not found in S3",
-    #     )
-    
-    # return StreamingResponse(
-    #     s3_object["Body"],
-    #     media_type=attachment.content_type,
-    #     headers={
-    #         "Content-Disposition": f'attachement; filename="{attachment.filename}"'
-    #     },
-    # )
     return {
-        "filename": attachment.filename,
-        "content_type": attachment.content_type,
+        "filename": attachment.file_name,
+        "content_type": attachment.file_type,
         "file_size": attachment.file_size,
         "download_url": download_url,
     }
-   
 
 
 def delete_attachment(
     attachment_id: int,
-    current_user: Employee,
+    current_user: User,
     db: Session,
 ):
-    attachment = db.get(Attachment, attachment_id)
+    attachment = db.get(TicketAttachment, attachment_id)
 
     if not attachment:
         raise HTTPException(
@@ -454,13 +497,13 @@ def delete_attachment(
             detail="Ticket not found",
         )
 
-    if ticket.user_id != current_user.id:
+    if ticket.customer_id != current_user.id:
         raise HTTPException(
             status_code=403,
             detail="Not authorized to delete this attachment",
         )
 
-    file_path = Path(attachment.file_path)
+    file_path = Path(attachment.file_url)
 
     if file_path.exists():
         file_path.unlink()

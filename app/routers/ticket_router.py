@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user
+from app.auth import get_current_user, require_role
 from app.database import get_db
 from app.schemas import (
     BulkDeleteTicketRequest,
@@ -12,6 +12,7 @@ from app.schemas import (
     TicketListResponse,
     TicketResponse,
     UpdateTicketRequest,
+    AssignTicketRequest,
 )
 from app.services.ticket_service import (
     bulk_create_tickets,
@@ -24,6 +25,7 @@ from app.services.ticket_service import (
     get_ticket_attachments,
     update_ticket,
     upload_attachment,
+    assign_ticket,
 )
 
 router = APIRouter()
@@ -33,6 +35,14 @@ router = APIRouter()
 def create_ticket_api(ticket: CreateTicketRequest, db: Session = Depends(get_db)):
     return create_ticket(ticket, db)
 
+@router.patch("/tickets/{ticket_id}/assign", response_model= TicketResponse)
+def assign_ticket_route(
+    ticket_id: int,
+    assignee_id: AssignTicketRequest,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role("agent", "admin")) 
+):
+    return assign_ticket(ticket_id, assignee_id , db)
 
 @router.post("/tickets/bulk")
 def bulk_create_tickets_api(
