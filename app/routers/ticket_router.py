@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_user, require_role
+from app.auth import Permission, get_current_user, require_permission
 from app.database import get_db
 from app.schemas import (
     BulkDeleteTicketRequest,
@@ -32,31 +32,34 @@ router = APIRouter()
 
 
 @router.post("/tickets", response_model=TicketResponse)
-def create_ticket_api(ticket: CreateTicketRequest, db: Session = Depends(get_db)):
+def create_ticket_api(
+    ticket: CreateTicketRequest,
+    current_user=Depends(require_permission(Permission.TICKET_CREATE)),
+    db: Session = Depends(get_db),
+):
     return create_ticket(ticket, db)
 
 @router.patch("/tickets/{ticket_id}/assign", response_model= TicketResponse)
 def assign_ticket_route(
     ticket_id: int,
     assignee_id: AssignTicketRequest,
+    current_user=Depends(require_permission(Permission.TICKET_ASSIGN)),
     db: Session = Depends(get_db),
-    current_user = Depends(require_role("agent", "admin")) 
 ):
-    return assign_ticket(ticket_id, assignee_id , db)
+    return assign_ticket(ticket_id, assignee_id, db)
 
 @router.post("/tickets/bulk")
 def bulk_create_tickets_api(
     tickets: list[CreateTicketRequest],
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.TICKET_CREATE)),
     db: Session = Depends(get_db),
 ):
     return bulk_create_tickets(tickets, current_user, db)
 
-
 @router.delete("/tickets/bulk")
 def bulk_delete_tickets_api(
     tickets: list[BulkDeleteTicketRequest],
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.TICKET_DELETE)),
     db: Session = Depends(get_db),
 ):
     return bulk_delete_tickets(tickets, current_user, db)
@@ -65,7 +68,7 @@ def bulk_delete_tickets_api(
 @router.patch("/tickets/bulk")
 def bulk_update_ticket_api(
     tickets: list[BulkUpdateTicketRequest],
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.TICKET_UPDATE_ANY)),
     db: Session = Depends(get_db),
 ):
     return bulk_update_tickets(tickets, current_user, db)
@@ -79,6 +82,7 @@ def get_ticket_api(
     title: str | None = Query(None),
     sort_by: str = Query("id"),
     order: str = Query("asc"),
+    current_user=Depends(require_permission(Permission.TICKET_READ_ALL)),
     db: Session = Depends(get_db),
 ):
     return get_all_ticket(page, limit, user_id, title, sort_by, order, db)
@@ -91,16 +95,25 @@ def update_ticket_api(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return update_ticket(ticket_id, ticket, current_user, db)
+    from app.core.permissions import ROLE_PERMISSIONS
+    permissions = ROLE_PERMISSIONS.get(current_user.role.value, set())
 
+    if Permission.TICKET_UPDATE_ANY in permissions:
+        return update_ticket(ticket_id, ticket, current_user, db)
+
+    if Permission.TICKET_UPDATE_OWN in permissions:
+        return update_ticket(ticket_id, ticket, current_user, db, owner_only=True)
+
+    raise HTTPException(status_code=403, detail="Not authorized to update this ticket")
 
 @router.delete("/tickets/{ticket_id}", response_model=MessageResponse)
 def delete_ticket_api(
     ticket_id: int,
-    current_user=Depends(get_current_user),
+    current_user=Depends(require_permission(Permission.TICKET_DELETE)),
     db: Session = Depends(get_db),
 ):
     return delete_ticket(ticket_id, current_user, db)
+
 
 
 @router.post("/tickets/{ticket_id}/attachments")
@@ -110,30 +123,41 @@ def upload_attachment_api(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from app.core.permissions import ROLE_PERMISSIONS
+
+    permissions = ROLE_PERMISSIONS.get(current_user.role.value, set())
+
+    if not (
+        Permission.TICKET_UPDATE_ANY in permissions
+        or Permission.TICKET_UPDATE_OWN in permissions
+    ):
+        raise HTTPException(status_code=403, detail="Not authorized to attach files")
+
     return upload_attachment(ticket_id, file, current_user, db)
 
 
-@router.get("/tickets/{ticket_id}/attachments")
-def get_ticket_attachments_api(
-    ticket_id: int,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    return get_ticket_attachments(
-        ticket_id,
-        current_user,
-        db,
-    )
+# @router.get("/tickets/{ticket_id}/attachments")
+# def get_ticket_attachments_api(
+#     ticket_id: int,
+#     current_user=Depends(require_permission(Permission.TICKET_READ)),
+#     db: Session = Depends(get_db),
+# ):
+#     return get_ticket_attachments(
+#         ticket_id,
+#         current_user,
+#         db,
+#     )
 
 
-@router.get("/attachments/{attachment_id}/download", response_class=FileResponse)
-def download_attachment_api(
-    attachment_id: int,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    return download_attachment(
-        attachment_id,
-        current_user,
-        db,
-    )
+# @router.get("/attachments/{attachment_id}/download", response_class=FileResponse)
+# def download_attachment_api(
+#     attachment_id: int,
+#     current_user=Depends(require_permission(Permission.TICKET_READ)),
+#     db: Session = Depends(get_db),
+# ):
+#     return download_attachment(
+#         attachment_id,
+#         current_user,
+#         db,
+#     )
+

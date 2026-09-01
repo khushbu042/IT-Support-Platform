@@ -1,3 +1,6 @@
+from enum import Enum
+from app.core.permissions import Permission, ROLE_PERMISSIONS
+
 import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -30,13 +33,14 @@ def get_current_user(
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-def require_role(*allowed_roles: str):
-    def role_checker(current_user: User = Depends(get_current_user)):
-        if current_user.role.value not in allowed_roles:
-            raise HTTPException(
-                status_code = 403,
-                detail = f"Requires one of roles: {allowed_roles}"
-            )
 
+def require_permission(*required: Permission):
+    def checker(current_user: User = Depends(get_current_user)):
+        user_permissions = ROLE_PERMISSIONS.get(current_user.role.value, set())
+        if not set(required).issubset(user_permissions):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Missing required permission(s): {required}"
+            )
         return current_user
-    return role_checker
+    return checker
