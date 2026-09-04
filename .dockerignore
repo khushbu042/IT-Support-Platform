@@ -1,6 +1,21 @@
 .venv
-__pycache__
-*.pyc
+__pycache__/
+*.py[cod]
 .git
 .env
-.pytest_cache
+.pytest_cache/
+.mypy_cache/
+
+# Docker artifacts
+Dockerfile
+docker-compose.yml
+
+# IDEs
+.vscode/
+.idea/
+
+# Local uploads and data
+uploads/
+
+# OS
+.DS_Store

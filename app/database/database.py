@@ -21,6 +21,9 @@ class Base(DeclarativeBase):
     pass
 
 
-with engine.connect() as connection:
-    result = connection.execute(text("SELECT 1"))
-    print(result.scalar())
+try:
+    with engine.connect() as connection:
+        result = connection.execute(text("SELECT 1"))
+        print(result.scalar())
+except Exception as exc:  # pragma: no cover - runtime environment
+    print("Warning: database not available at import time:", exc)
