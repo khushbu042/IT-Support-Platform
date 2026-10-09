@@ -115,4 +115,14 @@ class BulkUpdateTicketRequest(BaseModel):
 class BulkDeleteTicketRequest(BaseModel):
     id: int
 
+class TicketAssignedEvent(BaseModel):
+    ticket_id: int
+    ticket_title: str
+    agent_id: int
+    agent_name: str
+    agent_email: EmailStr
+    assigned_by_id: int | None = None
+    assigned_at: datetime
+    message_id: str = Field(..., min_length=1)
+
 

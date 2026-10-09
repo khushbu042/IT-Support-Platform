@@ -1,25 +1,40 @@
+# docker-compose.yml
 version: '3.8'
-
 services:
-  web:
-    build: .
+  # ── Our FastAPI Application ───────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
     ports:
       - "8000:8000"
     volumes:
-      - ./:/app
-    environment:
-      - PYTHONUNBUFFERED=1
+      # Hot reload - code changes reflect immediately
+      - .:/app
     env_file:
       - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql+psycopg://postgres:postgres@db:5432/SLA-escalation-manager
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
     depends_on:
-      - db
-      - redis
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - app_network
 
+  # ── Our PostgreSQL Database ───────────────────────────────
   db:
     image: postgres:15
     env_file:
       - .env
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -28,7 +43,59 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+    networks:
+      - app_network
 
+  # ── Our RabbitMQ Message Broker ─────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - app_network
+
+  # ── Our Mailhog Email Testing Service ─────────────────────────────
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - app_network
+
+  # ── Our Notification Worker ─────────────────────────────
+  notification-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - SMTP_HOST=mailhog
+      - SMTP_PORT=1025
+      - SMTP_FROM=noreply@localhost
+      - SMTP_USE_TLS=false
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    command: python -m app.workers.run
+    networks:
+      - app_network
+
+  # ── Our Redis Cache ─────────────────────────────
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
@@ -40,7 +107,14 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+    networks:
+      - app_network
 
-# Optional: named volumes
+
+# ── Named Volumes (data persists between restarts) ───────────
 volumes:
   postgres_data:
+
+# ── Networks (allows containers to communicate with each other) ───────────
+networks:
+  app_network:

@@ -1,3 +1,4 @@
+import logging
 import math
 import shutil
 from pathlib import Path
@@ -6,6 +7,7 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
+from app.infrastructure.rabbitmq.publisher import publish_ticket_assigned
 from app.services.s3_service import upload_file, delete_file, get_file, s3_client, generate_download_url
 from fastapi.responses import StreamingResponse
 
@@ -34,6 +36,7 @@ ALLOWED_FILES = {
 }
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 CHUNK_SIZE = 1024 * 1024  # 1 MB
+logger = logging.getLogger(__name__)
 
 def create_ticket(ticket: CreateTicketRequest, db: Session):
     existing_customer = db.query(User).filter(User.id == ticket.customer_id).first()
@@ -59,7 +62,12 @@ def create_ticket(ticket: CreateTicketRequest, db: Session):
 
     return new_ticket
 
-def assign_ticket(ticket_id: int, assignee: AssignTicketRequest, db: Session):
+def assign_ticket(
+    ticket_id: int,
+    assignee: AssignTicketRequest,
+    db: Session,
+    assigned_by_id: int | None = None,
+):
     ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
@@ -81,7 +89,13 @@ def assign_ticket(ticket_id: int, assignee: AssignTicketRequest, db: Session):
     db.commit()
     db.refresh(ticket)
 
-    # publish "ticket.assigned" event here later (for notifications)
+    try:
+        publish_ticket_assigned(ticket, assignee_user, assigned_by_id=assigned_by_id)
+    except Exception:
+        logger.exception(
+            "Ticket %s assigned but notification event was not published",
+            ticket.id,
+        )
 
     return ticket
 

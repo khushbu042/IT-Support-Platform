@@ -46,7 +46,12 @@ def assign_ticket_route(
     current_user=Depends(require_permission(Permission.TICKET_ASSIGN)),
     db: Session = Depends(get_db),
 ):
-    return assign_ticket(ticket_id, assignee_id, db)
+    return assign_ticket(
+        ticket_id,
+        assignee_id,
+        db,
+        assigned_by_id=current_user.id,
+    )
 
 @router.post("/tickets/bulk")
 def bulk_create_tickets_api(
